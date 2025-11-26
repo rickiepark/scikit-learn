@@ -3,6 +3,7 @@
 # This script fails if there are not comments to be posted.
 
 import os
+import re
 
 import requests
 
@@ -20,7 +21,7 @@ def get_versions(versions_file):
     versions : dict
         A dictionary with the versions of the packages.
     """
-    with open("versions.txt", "r") as f:
+    with open(versions_file, "r") as f:
         return dict(line.strip().split("=") for line in f)
 
 
@@ -212,7 +213,7 @@ def get_message(log_file, repo, pr_number, sha, run_id, details, versions):
         + "This PR is introducing linting issues. Here's a summary of the issues. "
         + "Note that you can avoid having linting issues by enabling `pre-commit` "
         + "hooks. Instructions to enable them can be found [here]("
-        + "https://scikit-learn.org/dev/developers/contributing.html#how-to-contribute)"
+        + "https://scikit-learn.org/dev/developers/development_setup.html#set-up-pre-commit)"
         + ".\n\n"
         + "You can see the details of the linting issues under the `lint` job [here]"
         + f"(https://github.com/{repo}/actions/runs/{run_id})\n\n"
@@ -288,6 +289,29 @@ def create_or_update_comment(comment, message, repo, pr_number, token):
     response.raise_for_status()
 
 
+def update_linter_fails_label(message, repo, pr_number, token):
+    """ "Add or remove the label indicating that the linting has failed."""
+
+    if "❌ Linting issues" in message:
+        # API doc: https://docs.github.com/en/rest/issues/labels?apiVersion=2022-11-28#add-labels-to-an-issue
+        response = requests.post(
+            f"https://api.github.com/repos/{repo}/issues/{pr_number}/labels",
+            headers=get_headers(token),
+            json={"labels": ["CI:Linter failure"]},
+        )
+        response.raise_for_status()
+    else:
+        # API doc: https://docs.github.com/en/rest/issues/labels?apiVersion=2022-11-28#remove-a-label-from-an-issue
+        response = requests.delete(
+            f"https://api.github.com/repos/{repo}/issues/{pr_number}/labels/CI:Linter"
+            " failure",
+            headers=get_headers(token),
+        )
+        # If the label was not set, trying to remove it returns a 404 error
+        if response.status_code != 404:
+            response.raise_for_status()
+
+
 if __name__ == "__main__":
     repo = os.environ["GITHUB_REPOSITORY"]
     token = os.environ["GITHUB_TOKEN"]
@@ -304,6 +328,9 @@ if __name__ == "__main__":
             "One of the following environment variables is not set: "
             "GITHUB_REPOSITORY, GITHUB_TOKEN, PR_NUMBER, LOG_FILE, RUN_ID"
         )
+
+    if not re.match(r"\d+$", pr_number):
+        raise ValueError(f"PR_NUMBER should be a number, got {pr_number!r} instead")
 
     try:
         comment = find_lint_bot_comments(repo, token, pr_number)
@@ -349,3 +376,5 @@ if __name__ == "__main__":
             token=token,
         )
         print(message)
+
+    update_linter_fails_label(message, repo, pr_number, token)
